@@ -1,0 +1,84 @@
+#### 处理无自旋的情况
+import numpy as np
+import pandas as pd
+from pymatgen.io.vasp.outputs import Vasprun
+fermi_energy = 7.8847  ### 设置费米能级
+
+
+def GetDictBandData():
+    '''
+    读取计算结果中的能带数据，vasprun.xml文件和计算能带所使用的k点文件是必须的
+    '''
+    my_vasprun = Vasprun(filename="vasprun.xml")
+    my_bd_data = my_vasprun.get_band_structure(kpoints_filename='KPOINTS')
+    dt_band_data = my_bd_data.as_dict()
+    return dt_band_data
+
+dt_band_data = GetDictBandData()
+
+### 获取一些重要计算能带结果中的一些重要数据
+my_dt_bands = dt_band_data["bands"]['1']
+my_dt_kpnts = dt_band_data["kpoints"]
+my_dt_brchs = dt_band_data["branches"]
+my_dt_reclat = dt_band_data["lattice_rec"]['matrix']
+
+kpts_count = len(my_dt_kpnts)
+bds_count = len(my_dt_bands)
+
+
+def GetKptDistance(ls_kpt1, ls_kpt2, rec_lat):
+    '''
+    根据两个k点的坐标得到它们在倒空间中的距离
+    '''
+    mat_rec_lat = np.array(rec_lat)
+    vec_k1 = ls_kpt1[0]*mat_rec_lat[0]+ls_kpt1[1]*mat_rec_lat[1]+ls_kpt1[2]*mat_rec_lat[2]
+    vec_k2 = ls_kpt2[0]*mat_rec_lat[0]+ls_kpt2[1]*mat_rec_lat[1]+ls_kpt2[2]*mat_rec_lat[2]
+    k_distance = np.linalg.norm(vec_k2-vec_k1)
+    return k_distance
+
+
+def GetLabelPosiInAxisX(ls_brchs_info, rec_lat, ls_kpnts):
+    '''
+    获取每个k点在X轴上的位置，即是将三维k点坐标转化到一维空间坐标系
+    '''
+    brchs_count = len(ls_brchs_info)
+    sum_distance = 0.0
+    df_klabels = pd.DataFrame(data=ls_brchs_info)
+    ls_labels_distance = []
+    ls_kpnts_distance = []
+    for brchs_index in range(brchs_count):
+        dict_brch = ls_brchs_info[brchs_index]
+        st_index = dict_brch['start_index']
+        ed_index = dict_brch['end_index']
+        brch_distance = GetKptDistance(ls_kpt1=ls_kpnts[st_index], ls_kpt2=ls_kpnts[ed_index], rec_lat=rec_lat)
+        ls_labels_distance.append(sum_distance+brch_distance)
+        for i in range(st_index, ed_index+1):
+            kpt_distance = sum_distance+(i-st_index)*brch_distance/(ed_index-st_index)
+            ls_kpnts_distance.append(kpt_distance)
+        sum_distance = sum_distance+brch_distance
+    df_klabels = df_klabels.assign(label_sum_distance=ls_labels_distance)
+    df_klabels.to_csv("klable.csv")           ### klabel.csv文件存储了每个k点的符号和在X轴上的位置
+    return ls_kpnts_distance
+
+     
+def WriteBandsEnergyToTxt(filename, dt_bands, ls_kpts, fermi_energy):
+    '''
+    把能带的能量数据写入到文本呢文件中,其中filename是文件名,dt_bands是读取到的能带文件，fermi_energy是费米能
+    '''
+    bds_count = len(dt_bands)
+    kps_count = len(ls_kpts)
+    with open(file=filename, mode='w') as bd_file:
+        bd_file.write("kpos\tenergy(eV)\tenergy_with_zero_fermi_energy\n")
+        for i in range(bds_count):
+            bd_energy = dt_bands[i]
+            for j in range(kps_count):
+                bd_energy_kj = bd_energy[j]
+                bd_energy_kj_zero_efermi = bd_energy_kj-fermi_energy
+                distance_kj = ls_kpts[j]
+                str_oneline = '{:.5f}\t{:.5f}\t{:.5f}\n'.format(distance_kj, bd_energy_kj, bd_energy_kj_zero_efermi)
+                bd_file.write(str_oneline)
+            bd_file.write("\n")
+
+
+ls_kd = GetLabelPosiInAxisX(my_dt_brchs, my_dt_reclat, my_dt_kpnts)
+WriteBandsEnergyToTxt(filename='bd.txt', dt_bands=my_dt_bands, ls_kpts=ls_kd, fermi_energy=fermi_energy)
